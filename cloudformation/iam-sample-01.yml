@@ -1,0 +1,54 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: 'AWS::LanguageExtensions'
+Description: Template for creating Initial IAM
+
+Parameters:
+  UserNames:
+    Type: List<String>
+    Default: user01, user02, user03
+
+Resources:
+  IAMGrouopInitialTest:
+    Type: 'AWS::IAM::Group'
+    DeletionPolicy: Retain
+    Properties:
+      GroupName: "test-user-group-01"
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/ReadOnlyAccess'
+  'Fn::ForEach::CreateUserLoopName':
+    - username
+    - !Ref UserNames
+    - 'IAMUserInitial${username}':
+        Type: 'AWS::IAM::User'
+        DeletionPolicy: Retain
+        Properties:
+          UserName: !Ref username
+          Groups: 
+            - "test-user-group-01"
+
+Outputs:
+  'Fn::ForEach::OutputUserLoopName':
+    - username
+    - !Ref UserNames
+    - 'UserNames${username}':
+        Description: Information about User name
+        Value: !Sub "IAMUserInitial${username}"
+
+      'PasswordSettingURL${username}':
+        Description: Please create a password at the URL
+        Value: !Join 
+          - ''
+          - - 'https://'
+            - console.aws.amazon.com/iam/home?region=
+            - !Ref 'AWS::Region'
+            - '#/users/'
+            - !Ref username
+            - '?section=security_credentials'
+
+  LoginURL:
+    Description: Information about console login URL
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !Ref 'AWS::AccountId'
+        - .signin.aws.amazon.com/console
