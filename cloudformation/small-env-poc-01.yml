@@ -1,4 +1,3 @@
-# ここに設定を書く
 Parameters:
   PJPrefix:
     Type: String

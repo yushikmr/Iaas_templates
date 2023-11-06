@@ -1,0 +1,319 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: 'AWS::LanguageExtensions'
+Description: Template for creating Initial IAM
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  VPCCIDR:
+    Type: String
+    Default: "10.1.0.0/16"
+
+  PublicSubnetACIDR:
+    Type: String
+    Default: "10.1.10.0/24"
+
+  PrivateSubnetACIDR:
+    Type: String
+    Default: "10.1.100.0/24"
+  
+  UserNames:
+    Type: List<String>
+    Default: user01, user02, user03
+
+
+Resources:
+
+    VPC: 
+      Type: "AWS::EC2::VPC"
+      Properties: 
+        CidrBlock: !Ref VPCCIDR
+        EnableDnsSupport: "true"
+        EnableDnsHostnames: "true"
+        InstanceTenancy: default
+        Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-vpc"
+
+    InternetGateway: 
+      Type: "AWS::EC2::InternetGateway"
+
+    InternetGatewayAttachment: 
+      Type: "AWS::EC2::VPCGatewayAttachment"
+      Properties: 
+        InternetGatewayId: !Ref InternetGateway
+        VpcId: !Ref VPC
+
+    PublicSubnetA: 
+      Type: "AWS::EC2::Subnet"
+      Properties: 
+        AvailabilityZone: "us-east-1a"
+        CidrBlock: !Ref PublicSubnetACIDR
+        VpcId: !Ref VPC 
+        Tags: 
+          - Key: Name
+            Value: !Sub "${PJPrefix}-public-subnet-a"
+
+    PrivateSubnetA: 
+      Type: "AWS::EC2::Subnet"
+      Properties: 
+        AvailabilityZone: "us-east-1a"
+        CidrBlock: !Ref PrivateSubnetACIDR
+        VpcId: !Ref VPC 
+        Tags: 
+          - Key: Name
+            Value: !Sub "${PJPrefix}-private-subnet-a"
+
+    PublicRouteTableA: 
+      Type: "AWS::EC2::RouteTable"
+      Properties: 
+        VpcId: !Ref VPC 
+
+    PrivateRouteTableA: 
+      Type: "AWS::EC2::RouteTable"
+      Properties: 
+        VpcId: !Ref VPC 
+        Tags: 
+          - Key: Name
+            Value: !Sub "${PJPrefix}-private-route-a"
+
+    PublicRouteA: 
+      Type: "AWS::EC2::Route"
+      Properties: 
+        RouteTableId: !Ref PublicRouteTableA 
+        DestinationCidrBlock: "0.0.0.0/0"
+        GatewayId: !Ref InternetGateway 
+
+    PrivateRouteA:
+      Type: "AWS::EC2::Route"
+      Properties: 
+        RouteTableId: !Ref PrivateRouteTableA
+        DestinationCidrBlock: "0.0.0.0/0"
+        NatGatewayId: !Ref NatGateway1
+
+    PublicSubnetARouteTableAssociation: 
+      Type: "AWS::EC2::SubnetRouteTableAssociation"
+      Properties: 
+        SubnetId: !Ref PublicSubnetA 
+        RouteTableId: !Ref PublicRouteTableA
+
+    PrivateSubnetARouteTableAssociation: 
+      Type: "AWS::EC2::SubnetRouteTableAssociation"
+      Properties: 
+        SubnetId: !Ref PrivateSubnetA
+        RouteTableId: !Ref PrivateRouteTableA 
+
+    NatGateway1:
+      Type: AWS::EC2::NatGateway
+      Properties:
+        AllocationId: !GetAtt NatGatewayEIP1.AllocationId
+        SubnetId: !Ref PublicSubnetA
+        Tags:
+          - Key: Name
+            Value: !Sub "${PJPrefix}-natgateway"
+
+    NatGatewayEIP1:
+      Type: AWS::EC2::EIP
+      Properties:
+        Domain: vpc
+
+    IAMGrouop:
+      Type: 'AWS::IAM::Group'
+      DeletionPolicy: Delete
+      Properties:
+        GroupName: !Sub "group-${PJPrefix}"
+        ManagedPolicyArns:
+          - 'arn:aws:iam::aws:policy/ReadOnlyAccess'
+
+    GroupPolicy:
+        Type: AWS::IAM::ManagedPolicy
+        Properties:
+          ManagedPolicyName: !Sub "group-policy-${PJPrefix}"
+          Groups: 
+            - !Ref IAMGrouop
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Sid: Statement1
+                Effect: Allow
+                Action:
+                  - ec2:Describe*
+                Resource: "*"
+              - Sid: EC2InstanceConnect
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2-instance-connect:SendSSHPublicKey
+                Effect: Allow
+                Resource:
+                  - arn:aws:ec2:*:*:instance/*
+                Condition:
+                  "Null":
+                    ec2:ResourceTag/Owner: false
+                  StringEqualsIfExists:
+                    ec2:ResourceTag/group: !Ref PJPrefix
+              - Sid: EC2InstanceConnect2
+                Action: ec2-instance-connect:OpenTunnel
+                Effect: Allow
+                Resource: arn:aws:ec2:*:*:instance-connect-endpoint/*
+            
+
+    S3AccessRole:
+      Type: "AWS::IAM::Role"
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement: 
+            - 
+              Effect: "Allow"
+              Principal: 
+                Service: 
+                  - "ec2.amazonaws.com"
+              Action: 
+                - "sts:AssumeRole"
+        Path: "/"
+        Tags:
+            - Key: Name
+              Value: !Sub "iamrole-${PJPrefix}"
+  
+    S3AccessPolicies:
+      Type: AWS::IAM::Policy
+      Properties:
+        PolicyName: s3access
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - "s3:ListAllMyBuckets"
+              - "s3:GetBucketLocation"
+            Resource: "arn:aws:s3:::*"
+          - Effect: Allow
+            Action: "*"
+            Resource:
+              - !Sub "arn:aws:s3:::s3-bucket-${PJPrefix}"
+              - !Sub "arn:aws:s3:::s3-bucket-${PJPrefix}/*"
+        Roles:
+        - !Ref S3AccessRole
+
+    S3AccessInstanceProfile:
+      Type: AWS::IAM::InstanceProfile
+      Properties:
+        Path: "/"
+        Roles:
+        - !Ref S3AccessRole
+
+    S3Bucket:
+        Type: "AWS::S3::Bucket"
+        Properties: 
+            BucketName: !Sub "s3-bucket-${PJPrefix}"
+
+    EICSG:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: "eic-${PJPrefix}-sg"
+        VpcId: !Ref VPC
+        GroupDescription: allow outbound to ec2
+
+    EC2SG:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupName: "ec2-${PJPrefix}-sg"
+        VpcId: !Ref VPC
+        GroupDescription: Allow SSH access from EICSG
+
+    EICSGEgress:
+      Type: AWS::EC2::SecurityGroupEgress
+      Properties:
+        GroupId: !Ref EICSG
+        CidrIp: 0.0.0.0/0
+        FromPort: 22
+        ToPort: 22
+        IpProtocol: tcp
+
+    EC2SGIngress:
+      Type: AWS::EC2::SecurityGroupIngress
+      Properties:
+           IpProtocol: tcp
+           FromPort: 22
+           ToPort: 22
+           GroupId: !Ref EC2SG
+           SourceSecurityGroupId: !Ref EICSG
+
+    'Fn::ForEach::CreateUserLoopName':
+      - username
+      - !Ref UserNames
+      - IAMUserInitial${username}:
+          Type: 'AWS::IAM::User'
+          DeletionPolicy: Delete
+          Properties:
+            UserName: !Ref username
+            Groups: 
+              - !Ref IAMGrouop
+
+        MyEC2Instance${username}:
+          Type: AWS::EC2::Instance
+          Properties:
+              ImageId: ami-06aa3f7caf3a30282
+              InstanceType: t2.micro
+              SubnetId: !Ref PrivateSubnetA
+              SecurityGroupIds:
+                - !Ref  EC2SG
+              IamInstanceProfile:
+                !Ref S3AccessInstanceProfile
+              Tags:
+                - Key: Name
+                  Value: !Sub "ec2-${username}"
+                - Key: group
+                  Value: !Ref PJPrefix
+              UserData:
+                Fn::Base64: |
+                  #!/bin/bash
+                  sudo apt update 
+                  sudo apt upgrade
+                  sudo apt  install awscli -y
+
+    EICEP:
+      Type: AWS::EC2::InstanceConnectEndpoint
+      Properties:
+        SecurityGroupIds: 
+          - !Ref EICSG
+        SubnetId: !Ref PrivateSubnetA
+        Tags: 
+          - Key: Name
+            Value: !Sub "eicep-${PJPrefix}"
+
+Outputs:
+# VPC
+  VPC:
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${PJPrefix}-vpc"
+
+  VPCCIDR:
+    Value: !Ref VPCCIDR
+    Export:
+      Name: !Sub "${PJPrefix}-vpc-cidr"
+
+# Subnet
+  PublicSubnetA:
+    Value: !Ref PublicSubnetA
+    Export:
+      Name: !Sub "${PJPrefix}-public-subnet-a"
+
+  PublicSubnetACIDR:
+    Value: !Ref PublicSubnetACIDR
+    Export:
+      Name: !Sub "${PJPrefix}-public-subnet-a-cidr"
+
+  PrivateSubnetA:
+    Value: !Ref PrivateSubnetA
+    Export:
+      Name: !Sub "${PJPrefix}-private-subnet-a"
+
+  PrivateSubnetACIDR:
+    Value: !Ref PrivateSubnetACIDR
+    Export:
+      Name: !Sub "${PJPrefix}-private-subnet-a-cidr"
+
+        
